@@ -2,11 +2,12 @@ import os
 import json
 import pandas as pd
 import streamlit as st
-from confluent_kafka import Consumer
+from confluent_kafka import Producer, Consumer
 
-# ---------- Streamlit Page ----------
-st.set_page_config(page_title="Real-Time Learning Roadmap", layout="wide")
-st.title("📊 Real-Time Engineering Roadmap Simulator")
+# ---------- Page Setup ----------
+st.set_page_config(page_title="AI Learning Roadmap", layout="wide")
+st.title("🎓 AI-Powered Learning Roadmap Platform")
+st.caption("Real-time personalized learning guidance using AI & streaming data")
 
 # ---------- Kafka Config ----------
 conf = {
@@ -15,39 +16,74 @@ conf = {
     'sasl.mechanisms': 'PLAIN',
     'sasl.username': os.getenv("KAFKA_API_KEY"),
     'sasl.password': os.getenv("KAFKA_API_SECRET"),
-    'group.id': 'dashboard-consumer-group',
-    'auto.offset.reset': 'latest'
 }
 
-# ---------- Init Consumer ONCE ----------
+# ---------- Kafka Producer ----------
+producer = Producer(conf)
+
+# ---------- Kafka Consumer ----------
 @st.cache_resource
 def init_consumer():
-    c = Consumer(conf)
+    c = Consumer({
+        **conf,
+        'group.id': 'dashboard-consumer-group',
+        'auto.offset.reset': 'latest'
+    })
     c.subscribe(['roadmap_updates'])
     return c
 
 consumer = init_consumer()
 
 # ---------- Session State ----------
-if "data" not in st.session_state:
-    st.session_state.data = []
+if "history" not in st.session_state:
+    st.session_state.history = []
 
-# ---------- Poll Kafka (NON-BLOCKING) ----------
-msg = consumer.poll(0.3)
+# ===============================
+# STUDENT INPUT SECTION
+# ===============================
+st.subheader("📥 Student Learning Progress")
 
-if msg is not None and not msg.error():
-    event = json.loads(msg.value().decode())
-    st.session_state.data.append(event)
+with st.form("student_form"):
+    student_id = st.number_input("Student ID", min_value=1, value=101)
+    skill = st.selectbox("Select Skill", ["Python", "SQL", "Pandas", "Machine Learning"])
+    progress = st.slider("Completion Progress (%)", 0, 100, 30)
+    submit = st.form_submit_button("Submit Progress")
 
-# ---------- Display ----------
-if st.session_state.data:
-    df = pd.DataFrame(st.session_state.data)
+if submit:
+    event = {
+        "student_id": student_id,
+        "skill": skill,
+        "progress": progress
+    }
 
-    st.subheader("📌 Live Roadmap Updates")
+    producer.produce("student_progress", json.dumps(event))
+    producer.flush()
+
+    st.success("✅ Progress submitted! AI is analyzing...")
+
+# ===============================
+# AI OUTPUT SECTION
+# ===============================
+st.divider()
+st.subheader("🧠 AI Recommendation")
+
+msg = consumer.poll(0.5)
+
+if msg and not msg.error():
+    data = json.loads(msg.value().decode())
+    st.session_state.history.append(data)
+
+if st.session_state.history:
+    latest = st.session_state.history[-1]
+
+    st.success(
+        f"📌 Skill: {latest['skill']} | "
+        f"Progress: {latest['progress']}% | "
+        f"Next Step: **{latest['next_step']}**"
+    )
+
+    df = pd.DataFrame(st.session_state.history)
+    st.subheader("📊 Recommendation History")
     st.dataframe(df, use_container_width=True)
-    st.metric("Total Updates", len(df))
 else:
-    st.info("Waiting for roadmap updates from Kafka...")
-
-# ---------- Manual refresh hint ----------
-st.caption("⏱️ Page refreshes automatically when new Kafka messages arrive")
+    st.info("Waiting for AI recommendations...")
